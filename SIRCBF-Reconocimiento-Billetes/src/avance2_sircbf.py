@@ -1,20 +1,25 @@
-"""SIRCBF - Avance 2
-Clasificador K-NN implementado desde cero para el dataset UCI Banknote Authentication.
+"""SIRCBF - Avance 2 (version corregida)
+Clasificador K-NN implementado desde cero para UCI Banknote Authentication.
 
-Uso:
+Correcciones metodologicas principales:
+- La division se realiza por grupos de caracteristicas identicas: una misma
+  combinacion de variance, skewness, curtosis y entropy nunca aparece en mas
+  de un subconjunto.
+- Se comprueba expresamente el solapamiento entre entrenamiento, validacion
+  y prueba.
+- La normalizacion se ajusta solo con entrenamiento.
+- El conjunto de prueba se mantiene reservado en este avance.
+- Si una misma combinacion de caracteristicas aparece con etiquetas distintas,
+  el programa se detiene para revisar esa inconsistencia en vez de ocultarla.
+
+Instalacion:
     pip install numpy pandas matplotlib ucimlrepo
+Ejecucion:
     python avance2_sircbf.py
-
-Importante:
-- El nucleo K-NN, la division estratificada y la normalizacion son codigo propio.
-- Scikit-learn no se utiliza para entrenar, dividir ni normalizar.
-- En este avance se evalua con VALIDACION. El conjunto TEST queda reservado
-  para la evaluacion final y no se consulta aqui.
-- Se conservan las etiquetas como Clase 0 y Clase 1. Verificar el significado
-  semantico de cada etiqueta antes de nombrarlas autentico/falsificado.
 """
 
 from pathlib import Path
+import json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -42,37 +47,53 @@ def load_uci_banknote():
         raise ValueError("Se esperaba una sola columna objetivo en el dataset UCI.")
 
     X.columns = [str(c).strip().lower() for c in X.columns]
+    missing_columns = [col for col in FEATURES if col not in X.columns]
+    if missing_columns:
+        raise ValueError(f"Faltan columnas predictoras en UCI: {missing_columns}")
     X = X[FEATURES]
     y = y.iloc[:, 0].rename("class")
-    df = pd.concat([X, y], axis=1)
-    return df
+    return pd.concat([X, y], axis=1)
 
 
 def clean_and_report(df):
-    """Convierte columnas a numericas, informa faltantes/duplicados e infinitos."""
+    """Convierte columnas, informa faltantes/infinitos/duplicados y conserva filas."""
     df = df.copy()
     for col in FEATURES + ["class"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    infinite_mask = np.isinf(df[FEATURES].to_numpy(dtype=float)).any(axis=1)
+    # Contar faltantes antes de retirar cualquier fila.
+    n_missing_before = int(df[FEATURES + ["class"]].isna().sum().sum())
+
+    # Detectar infinitos solo en las variables predictoras.
+    X_numeric = df[FEATURES].to_numpy(dtype=float)
+    infinite_mask = np.isinf(X_numeric).any(axis=1)
     n_infinite = int(infinite_mask.sum())
     if n_infinite:
         df = df.loc[~infinite_mask].copy()
 
-    n_missing_before = int(df[FEATURES + ["class"]].isna().sum().sum())
+    n_missing_rows_removed = int(df[FEATURES + ["class"]].isna().any(axis=1).sum())
     df = df.dropna(subset=FEATURES + ["class"]).copy()
-    n_duplicates = int(df.duplicated().sum())
 
-    # No eliminamos duplicados automaticamente: se reportan para evitar
-    # borrar observaciones sin una justificacion metodologica.
+    # Reportar duplicados exactos y duplicados de caracteristicas.
+    n_duplicate_full_rows = int(df.duplicated(subset=FEATURES + ["class"]).sum())
+    n_duplicate_feature_rows = int(df.duplicated(subset=FEATURES).sum())
+
+    if not np.all(np.isclose(df["class"].to_numpy(dtype=float) % 1, 0)):
+        raise ValueError("La variable objetivo contiene etiquetas no enteras.")
     df["class"] = df["class"].astype(int)
+
+    classes = set(df["class"].unique().tolist())
+    if classes != {0, 1}:
+        raise ValueError(f"Se esperaban las etiquetas binarias 0 y 1; se encontraron: {sorted(classes)}")
 
     print("\n=== CONTROL DE CALIDAD ===")
     print(f"Filas despues de retirar infinitos/faltantes: {len(df)}")
     print(f"Valores faltantes detectados antes de eliminarlos: {n_missing_before}")
     print(f"Filas con infinitos detectadas y retiradas: {n_infinite}")
-    print(f"Filas duplicadas detectadas (se conservan y reportan): {n_duplicates}")
-    print("\nValores faltantes por columna:")
+    print(f"Filas retiradas por valores faltantes: {n_missing_rows_removed}")
+    print(f"Filas duplicadas exactas (se conservan): {n_duplicate_full_rows}")
+    print(f"Filas con caracteristicas repetidas (se conservan y agrupan): {n_duplicate_feature_rows}")
+    print("\nValores faltantes por columna despues de limpieza:")
     print(df[FEATURES + ["class"]].isna().sum().to_string())
     return df.reset_index(drop=True)
 
@@ -97,7 +118,6 @@ def create_eda(df):
     corr = df[FEATURES].corr(numeric_only=True)
     print(corr.round(3).to_string())
 
-    # Distribucion de cada variable.
     fig, axes = plt.subplots(2, 2, figsize=(11, 7))
     for ax, feature in zip(axes.flat, FEATURES):
         ax.hist(df[feature], bins=30, edgecolor="black")
@@ -108,7 +128,6 @@ def create_eda(df):
     fig.savefig(OUT_DIR / "01_distribuciones.png", dpi=160)
     plt.close(fig)
 
-    # Balance de clases.
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.bar([str(x) for x in counts.index], counts.values)
     ax.set_title("Balance de clases")
@@ -118,7 +137,6 @@ def create_eda(df):
     fig.savefig(OUT_DIR / "02_balance_clases.png", dpi=160)
     plt.close(fig)
 
-    # Matriz de correlacion.
     fig, ax = plt.subplots(figsize=(7, 6))
     image = ax.imshow(corr.to_numpy(), aspect="auto", vmin=-1, vmax=1)
     ax.set_xticks(range(len(FEATURES)), FEATURES, rotation=35, ha="right")
@@ -134,36 +152,102 @@ def create_eda(df):
     print(f"\nGraficas guardadas en: {OUT_DIR.resolve()}")
 
 
-def stratified_split_indices(y, train_ratio=0.70, val_ratio=0.15, seed=SEED):
-    """Division estratificada propia. El conjunto de prueba queda reservado."""
-    y = np.asarray(y)
+def stratified_group_split_indices(X, y, train_ratio=0.70, val_ratio=0.15, seed=SEED):
+    """Divide por grupos de filas con caracteristicas identicas y estratifica por clase.
+
+    Todas las filas con la misma combinacion de caracteristicas van al mismo
+    subconjunto. Esto evita que una copia de un registro aparezca en train y
+    otra copia en validacion/prueba. Se conservan todas las filas originales.
+    """
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y, dtype=int)
+    test_ratio = 1.0 - train_ratio - val_ratio
+    if train_ratio <= 0 or val_ratio <= 0 or test_ratio <= 0:
+        raise ValueError("Las proporciones deben ser positivas y sumar menos de 1 para train+val.")
+
+    unique_X, inverse = np.unique(X, axis=0, return_inverse=True)
+    n_groups = len(unique_X)
+    group_labels = np.empty(n_groups, dtype=int)
+    group_sizes = np.bincount(inverse, minlength=n_groups)
+    conflicting_groups = []
+
+    for group_id in range(n_groups):
+        labels = np.unique(y[inverse == group_id])
+        if len(labels) != 1:
+            conflicting_groups.append((group_id, labels.tolist(), int(group_sizes[group_id])))
+        else:
+            group_labels[group_id] = int(labels[0])
+
+    if conflicting_groups:
+        preview = conflicting_groups[:10]
+        raise ValueError(
+            "Se encontraron combinaciones de caracteristicas identicas con etiquetas distintas. "
+            f"No se puede hacer una division agrupada segura sin revisar esos casos. Muestra: {preview}"
+        )
+
     rng = np.random.default_rng(seed)
-    train_parts, val_parts, test_parts = [], [], []
+    ratios = np.array([train_ratio, val_ratio, test_ratio], dtype=float)
+    group_assignment = np.full(n_groups, -1, dtype=int)  # 0=train, 1=val, 2=test
 
     for label in np.unique(y):
-        class_indices = np.flatnonzero(y == label)
-        rng.shuffle(class_indices)
-        n = len(class_indices)
-        n_train = int(round(n * train_ratio))
-        n_val = int(round(n * val_ratio))
-        n_test = n - n_train - n_val
-        if n_test < 0:
-            raise ValueError("Las proporciones de division no son validas.")
-        train_parts.extend(class_indices[:n_train])
-        val_parts.extend(class_indices[n_train:n_train + n_val])
-        test_parts.extend(class_indices[n_train + n_val:])
+        label_groups = np.flatnonzero(group_labels == label)
+        if len(label_groups) < 3:
+            raise ValueError(f"La clase {label} tiene menos de 3 grupos unicos; no se puede dividir en 3 partes.")
 
-    train_idx = np.array(train_parts, dtype=int)
-    val_idx = np.array(val_parts, dtype=int)
-    test_idx = np.array(test_parts, dtype=int)
+        # Aleatorizar empates y colocar primero los grupos mas grandes para
+        # aproximar las proporciones sin separar sus filas repetidas.
+        shuffled = rng.permutation(label_groups)
+        order = sorted(shuffled.tolist(), key=lambda gid: -int(group_sizes[gid]))
+        total_rows = int(group_sizes[label_groups].sum())
+        targets = ratios * total_rows
+        current = np.zeros(3, dtype=float)
+
+        for group_id in order:
+            size = float(group_sizes[group_id])
+            candidate_scores = []
+            for split_id in range(3):
+                proposed = current.copy()
+                proposed[split_id] += size
+                score = np.sum(((proposed - targets) / np.maximum(targets, 1.0)) ** 2)
+                candidate_scores.append(score)
+            best_score = min(candidate_scores)
+            best_splits = [i for i, score in enumerate(candidate_scores) if np.isclose(score, best_score)]
+            selected_split = int(rng.choice(best_splits))
+            group_assignment[group_id] = selected_split
+            current[selected_split] += size
+
+    train_idx = np.flatnonzero(group_assignment[inverse] == 0)
+    val_idx = np.flatnonzero(group_assignment[inverse] == 1)
+    test_idx = np.flatnonzero(group_assignment[inverse] == 2)
     rng.shuffle(train_idx)
     rng.shuffle(val_idx)
     rng.shuffle(test_idx)
-    return train_idx, val_idx, test_idx
+
+    # Verificacion explicita: ningun vector de caracteristicas se repite entre partes.
+    train_groups = set(inverse[train_idx].tolist())
+    val_groups = set(inverse[val_idx].tolist())
+    test_groups = set(inverse[test_idx].tolist())
+    overlap_train_val = len(train_groups & val_groups)
+    overlap_train_test = len(train_groups & test_groups)
+    overlap_val_test = len(val_groups & test_groups)
+    if overlap_train_val or overlap_train_test or overlap_val_test:
+        raise AssertionError("Fuga de grupos: se detecto solapamiento entre subconjuntos.")
+
+    repeated_groups = int(np.sum(group_sizes > 1))
+    repeated_extra_rows = int(np.sum(group_sizes[group_sizes > 1] - 1))
+    diagnostics = {
+        "unique_feature_groups": int(n_groups),
+        "repeated_feature_groups": repeated_groups,
+        "extra_rows_in_repeated_groups": repeated_extra_rows,
+        "overlap_train_val": overlap_train_val,
+        "overlap_train_test": overlap_train_test,
+        "overlap_val_test": overlap_val_test,
+    }
+    return train_idx, val_idx, test_idx, diagnostics
 
 
 def standardize_fit(X_train):
-    """Calcula media y desviacion solo con entrenamiento (evita fuga de datos)."""
+    """Calcula media y desviacion solo con entrenamiento."""
     mean = np.mean(X_train, axis=0)
     std = np.std(X_train, axis=0, ddof=0)
     std[std == 0] = 1.0
@@ -175,15 +259,13 @@ def standardize_transform(X, mean, std):
 
 
 def knn_predict_one(X_train, y_train, x_new, k):
-    """Predice una muestra por distancia euclidiana y votacion mayoritaria.
+    """Predice por distancia euclidiana y votacion mayoritaria.
 
-    Desempate: si dos o mas clases tienen igual numero de votos, se escoge
-    la etiqueta numericamente menor. Es una regla determinista documentada.
+    En caso de empate se elige la etiqueta numericamente menor.
     """
     X_train = np.asarray(X_train, dtype=float)
     y_train = np.asarray(y_train)
     x_new = np.asarray(x_new, dtype=float)
-
     if X_train.ndim != 2 or x_new.ndim != 1:
         raise ValueError("Dimensiones incorrectas para X_train o x_new.")
     if X_train.shape[1] != x_new.shape[0]:
@@ -198,8 +280,7 @@ def knn_predict_one(X_train, y_train, x_new, k):
     neighbor_labels = y_train[nearest_idx]
     labels, votes = np.unique(neighbor_labels, return_counts=True)
     max_votes = votes.max()
-    tied_labels = labels[votes == max_votes]
-    prediction = np.min(tied_labels)
+    prediction = np.min(labels[votes == max_votes])
     return prediction
 
 
@@ -209,7 +290,7 @@ def knn_predict(X_train, y_train, X_query, k):
 
 
 def classification_metrics(y_true, y_pred):
-    """Metricas para etiquetas binarias 0/1, sin usar librerias de ML."""
+    """Metricas para etiquetas binarias 0/1, calculadas sin librerias de ML."""
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
     labels = [0, 1]
@@ -241,25 +322,18 @@ def classification_metrics(y_true, y_pred):
 
 
 def run_unit_tests():
-    """Tres pruebas pequenas con resultados conocidos/calculables a mano."""
+    """Tres pruebas pequenas con resultados conocidos y calculables a mano."""
     X_demo = np.array([
-        [0.0, 0.0],
-        [1.0, 0.0],
-        [0.0, 1.0],
-        [5.0, 5.0],
-        [6.0, 5.0],
+        [0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [5.0, 5.0], [6.0, 5.0]
     ])
     y_demo = np.array([0, 0, 0, 1, 1])
 
-    # Prueba 1: un vecino mas cercano, cercano al grupo de clase 0.
     p1 = knn_predict_one(X_demo, y_demo, np.array([0.2, 0.2]), k=1)
     assert p1 == 0, f"Prueba 1 fallo: se esperaba 0 y salio {p1}"
 
-    # Prueba 2: con K=3, dos vecinos de clase 1 y uno de clase 0.
     p2 = knn_predict_one(X_demo, y_demo, np.array([5.5, 5.2]), k=3)
     assert p2 == 1, f"Prueba 2 fallo: se esperaba 1 y salio {p2}"
 
-    # Prueba 3: empate 1 a 1; regla estable: gana la etiqueta menor (clase 0).
     X_tie = np.array([[0.0, 0.0], [2.0, 0.0]])
     y_tie = np.array([0, 1])
     p3 = knn_predict_one(X_tie, y_tie, np.array([1.0, 0.0]), k=2)
@@ -272,24 +346,37 @@ def run_unit_tests():
 
 
 def main():
-    print("SIRCBF - AVANCE 2 | K-NN implementado desde cero")
+    print("SIRCBF - AVANCE 2 CORREGIDO | K-NN implementado desde cero")
     df = load_uci_banknote()
     df = clean_and_report(df)
     create_eda(df)
 
     X = df[FEATURES].to_numpy(dtype=float)
     y = df["class"].to_numpy(dtype=int)
-    train_idx, val_idx, test_idx = stratified_split_indices(y)
+    train_idx, val_idx, test_idx, diagnostics = stratified_group_split_indices(X, y)
 
     X_train, y_train = X[train_idx], y[train_idx]
     X_val, y_val = X[val_idx], y[val_idx]
-    # X_test/y_test se separan, pero deliberadamente NO se consultan en Avance 2.
-    print("\n=== DIVISION ESTRATIFICADA (SEMILLA 42) ===")
+
+    print("\n=== DIVISION ESTRATIFICADA POR GRUPOS DE CARACTERISTICAS (SEMILLA 42) ===")
     print(f"Entrenamiento: {len(train_idx)} muestras")
     print(f"Validacion:    {len(val_idx)} muestras")
     print(f"Prueba:        {len(test_idx)} muestras (reservadas; no evaluadas ahora)")
+    print(f"Grupos unicos de caracteristicas: {diagnostics['unique_feature_groups']}")
+    print(f"Grupos con caracteristicas repetidas: {diagnostics['repeated_feature_groups']}")
+    print(f"Filas adicionales dentro de grupos repetidos: {diagnostics['extra_rows_in_repeated_groups']}")
+    print("Solapamiento de grupos train-validacion:", diagnostics["overlap_train_val"])
+    print("Solapamiento de grupos train-prueba:", diagnostics["overlap_train_test"])
+    print("Solapamiento de grupos validacion-prueba:", diagnostics["overlap_val_test"])
+    print("Verificacion: ningun grupo de caracteristicas aparece en mas de un subconjunto.")
 
-    # Baseline: siempre predice la clase mas frecuente del conjunto de entrenamiento.
+    # Reportar distribucion por clase en cada subconjunto.
+    print("\nDistribucion de clases por subconjunto:")
+    for name, labels in [("Entrenamiento", y_train), ("Validacion", y_val)]:
+        counts = pd.Series(labels).value_counts().sort_index().to_dict()
+        print(f"{name}: {counts}")
+    print("Prueba: reservada; no se muestran sus etiquetas ni se calculan metricas en este avance.")
+
     majority_class = int(pd.Series(y_train).value_counts().idxmax())
     baseline_pred = np.full(shape=len(y_val), fill_value=majority_class, dtype=int)
     baseline_metrics = classification_metrics(y_val, baseline_pred)
@@ -300,7 +387,7 @@ def main():
     print("Matriz de confusion [filas=real 0/1, columnas=predicho 0/1]:")
     print(baseline_metrics["confusion_matrix"])
 
-    # Normalizacion calculada unicamente con entrenamiento.
+    # Ajustar la normalizacion solo con entrenamiento.
     mean, std = standardize_fit(X_train)
     X_train_scaled = standardize_transform(X_train, mean, std)
     X_val_scaled = standardize_transform(X_val, mean, std)
@@ -310,23 +397,47 @@ def main():
     for k in K_CANDIDATES:
         predictions = knn_predict(X_train_scaled, y_train, X_val_scaled, k)
         metrics = classification_metrics(y_val, predictions)
-        results.append((k, metrics["accuracy"], metrics["macro_f1"]))
+        results.append((k, metrics["accuracy"], metrics["macro_f1"], metrics))
         print(f"K={k:2d} | accuracy={metrics['accuracy']:.4f} | macro-F1={metrics['macro_f1']:.4f}")
 
-    best_k, best_acc, best_macro_f1 = sorted(
+    best_k, best_acc, best_macro_f1, best_metrics = sorted(
         results, key=lambda row: (-row[1], -row[2], row[0])
     )[0]
     print(f"\nK seleccionado con validacion: {best_k}")
     print(f"Exactitud K-NN en validacion: {best_acc:.4f}")
     print(f"F1 macro K-NN en validacion: {best_macro_f1:.4f}")
+    print("Matriz de confusion K-NN [filas=real 0/1, columnas=predicho 0/1]:")
+    print(best_metrics["confusion_matrix"])
     print("Comparacion: baseline accuracy = "
           f"{baseline_metrics['accuracy']:.4f}; K-NN accuracy = {best_acc:.4f}")
     print("NOTA: el conjunto de prueba permanece reservado para la entrega final.")
 
     run_unit_tests()
-    print("\n=== FIN DEL AVANCE 2 ===")
-    print("Guarda las salidas y graficas como evidencias. No presentes numeros "
-          "hasta haber ejecutado este script y revisado sus resultados.")
+
+    # Guardar un resumen reproducible del avance, sin incluir metricas del test.
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    summary = {
+        "seed": SEED,
+        "samples_total": int(len(df)),
+        "train_samples": int(len(train_idx)),
+        "validation_samples": int(len(val_idx)),
+        "test_samples_reserved": int(len(test_idx)),
+        "duplicate_full_rows_preserved": int(df.duplicated(subset=FEATURES + ["class"]).sum()),
+        "group_diagnostics": diagnostics,
+        "baseline_validation_accuracy": baseline_metrics["accuracy"],
+        "baseline_validation_macro_f1": baseline_metrics["macro_f1"],
+        "selected_k": int(best_k),
+        "knn_validation_accuracy": best_acc,
+        "knn_validation_macro_f1": best_macro_f1,
+        "test_evaluated": False,
+    }
+    with (OUT_DIR / "resumen_avance2.json").open("w", encoding="utf-8") as file:
+        json.dump(summary, file, indent=2, ensure_ascii=False)
+
+    print("\n=== FIN DEL AVANCE 2 CORREGIDO ===")
+    print(f"Evidencias guardadas en: {OUT_DIR.resolve()}")
+    print("Archivos: 01_distribuciones.png, 02_balance_clases.png, 03_correlaciones.png, resumen_avance2.json")
+    print("El conjunto de prueba sigue reservado y no fue evaluado.")
 
 
 if __name__ == "__main__":
