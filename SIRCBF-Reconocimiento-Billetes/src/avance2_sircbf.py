@@ -1,5 +1,5 @@
 """SIRCBF - Avance 2 (version corregida)
-Clasificador K-NN implementado desde cero para UCI Banknote Authentication.
+Clasificador K-NN implementado desde cero para UCI Banknote Authentication. 
 
 Correcciones metodologicas principales:
 - La division se realiza por grupos de caracteristicas identicas: una misma
