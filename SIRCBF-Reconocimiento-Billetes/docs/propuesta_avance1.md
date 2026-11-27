@@ -32,11 +32,13 @@ Se selecciona K-Nearest Neighbors (K-NN), algoritmo supervisado de clasificació
 ## 6. Datos y variables
 
 Fuente: UCI Machine Learning Repository, Banknote Authentication (dataset ID 267). La ficha reporta 1.372 instancias y cuatro variables predictoras: `variance`, `skewness`, `curtosis` y `entropy`. La variable objetivo es `class`, con dos categorías. Se mantendrán las etiquetas numéricas Clase 0 y Clase 1 hasta comprobar la correspondencia semántica en una fuente adecuada.
+Para los experimentos se contempla una división estratificada de los datos en entrenamiento (70 %), validación (15 %) y prueba (15 %), utilizando una semilla fija para garantizar la reproducibilidad.
 
 ## 7. Métrica de éxito
 
-Se utilizará la exactitud (accuracy) como métrica general, complementada por precisión, sensibilidad (recall), F1 y matriz de confusión. Se prestará atención a los errores por clase. La elección final se justificará con la distribución de clases y los objetivos del problema.
-
+Se utilizará la exactitud (accuracy) como métrica general, complementada por precisión, sensibilidad (recall), F1 y matriz de confusión.
+Se prestará atención a los errores por clase. La elección final se justificará con la distribución de clases y los objetivos del problema.Se considerará que el modelo presenta una mejora cuando su exactitud supere la obtenida por el modelo baseline en el conjunto de validación. También se analizará especialmente la sensibilidad de la clase correspondiente a los especímenes falsificados, debido a la importancia de evitar clasificarlos incorrectamente como auténticos. La evaluación definitiva se realizará sobre el conjunto de prueba reservado.
+UCI Machine Learning Repository. (s. f.). Banknote Authentication [Conjunto de datos]. https://archive.ics.uci.edu/dataset/267/banknote+authentication
 ## 8. Alcance y limitaciones
 
 El prototipo clasifica registros numéricos ya procesados; no es un sistema óptico de lectura de billetes ni un mecanismo oficial de autenticación. No se afirmará su validez para moneda boliviana sin datos locales representativos y evaluación independiente.
