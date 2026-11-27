@@ -1,0 +1,22 @@
+{
+  "seed": 42,
+  "samples_total": 1372,
+  "train_samples": 961,
+  "validation_samples": 205,
+  "test_samples_reserved": 206,
+  "duplicate_full_rows_preserved": 24,
+  "group_diagnostics": {
+    "unique_feature_groups": 1348,
+    "repeated_feature_groups": 11,
+    "extra_rows_in_repeated_groups": 24,
+    "overlap_train_val": 0,
+    "overlap_train_test": 0,
+    "overlap_val_test": 0
+  },
+  "baseline_validation_accuracy": 0.5560975609756098,
+  "baseline_validation_macro_f1": 0.35736677115987464,
+  "selected_k": 3,
+  "knn_validation_accuracy": 0.975609756097561,
+  "knn_validation_macro_f1": 0.9754202537109422,
+  "test_evaluated": false
+}
